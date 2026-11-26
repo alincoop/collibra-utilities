@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:flowable="http://flowable.org/bpmn" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" xmlns:design="http://flowable.org/design" typeLanguage="http://www.w3.org/2001/XMLSchema" expressionLanguage="http://www.w3.org/1999/XPath" targetNamespace="http://www.collibra.com/apiv2" exporter="Flowable Design" exporterVersion="2025.1.08" design:palette="flowable-core-process-palette">
+  <collaboration id="Collaboration"><participant id="pool1" name="Manage Dashboard Files" processRef="manageDashboardFiles"></participant></collaboration>
+  <process id="manageDashboardFiles" name="Manage Dashboard Files" isExecutable="true"><documentation>Uploads or deletes files used on dashboards, in the folder set by the 'File location' configuration variable. Uploads are checked against an extension allow-list and plain-file-name rules; if the file already exists, the initiator must confirm the overwrite. Deletes let the initiator pick from the files currently in the folder. Replaces the Upload Dashboard Files and Delete Dashboard Files workflows. Restrict who can start it to system administrators.</documentation>
+    <extensionElements><design:stencilid><![CDATA[BPMNDiagram]]></design:stencilid><design:creationdate><![CDATA[2026-11-26T11:49:05.000Z]]></design:creationdate><design:modificationdate><![CDATA[2026-11-26T11:49:05.000Z]]></design:modificationdate></extensionElements>
+    <laneSet id="laneSet_manageDashboardFiles"><lane id="lane1"><flowNodeRef>start</flowNodeRef><flowNodeRef>actionGateway</flowNodeRef><flowNodeRef>unknownAction</flowNodeRef><flowNodeRef>validateUpload</flowNodeRef><flowNodeRef>existsGateway</flowNodeRef><flowNodeRef>confirmOverwrite</flowNodeRef><flowNodeRef>overwriteGateway</flowNodeRef><flowNodeRef>saveFile</flowNodeRef><flowNodeRef>discardUpload</flowNodeRef><flowNodeRef>listFiles</flowNodeRef><flowNodeRef>chooseFile</flowNodeRef><flowNodeRef>deleteGateway</flowNodeRef><flowNodeRef>deleteFile</flowNodeRef><flowNodeRef>end</flowNodeRef><flowNodeRef>flow1</flowNodeRef><flowNodeRef>toUpload</flowNodeRef><flowNodeRef>toDelete</flowNodeRef><flowNodeRef>toUnknown</flowNodeRef><flowNodeRef>flow5</flowNodeRef><flowNodeRef>flow6</flowNodeRef><flowNodeRef>toConfirm</flowNodeRef><flowNodeRef>toSaveNew</flowNodeRef><flowNodeRef>flow9</flowNodeRef><flowNodeRef>toOverwrite</flowNodeRef><flowNodeRef>toDiscard</flowNodeRef><flowNodeRef>flow12</flowNodeRef><flowNodeRef>flow13</flowNodeRef><flowNodeRef>flow14</flowNodeRef><flowNodeRef>flow15</flowNodeRef><flowNodeRef>toDeleteFile</flowNodeRef><flowNodeRef>toCancelDelete</flowNodeRef><flowNodeRef>flow18</flowNodeRef></lane></laneSet>
+    <startEvent id="start" name="Start" flowable:initiator="initiator" flowable:formFieldValidation="false"><extensionElements><flowable:formProperty id="section" name="File location (folder under the dgc data directory)" type="string" default="custom-dashboards" readable="false" required="true"></flowable:formProperty><flowable:formProperty id="allowedExtensions" name="Allowed upload file extensions (comma-separated)" type="string" default="png,jpg,jpeg,gif,svg,html,css,js" readable="false" required="true"></flowable:formProperty><flowable:formProperty id="action" name="Action" type="enum" default="upload" required="true"><flowable:value id="upload" name="Upload a file"></flowable:value><flowable:value id="delete" name="Delete a file"></flowable:value></flowable:formProperty><flowable:formProperty id="fileUpload" name="File to upload (only for Upload)" type="fileUpload" required="false"></flowable:formProperty><flowable:work-form-field-validation><![CDATA[false]]></flowable:work-form-field-validation><design:stencilid><![CDATA[StartNoneEvent]]></design:stencilid></extensionElements></startEvent>
+    <exclusiveGateway id="actionGateway" name="Action?" default="toUnknown"><extensionElements><design:stencilid><![CDATA[Exclusive_Databased_Gateway]]></design:stencilid></extensionElements></exclusiveGateway>
+    <scriptTask id="unknownAction" name="Reject unknown action" scriptFormat="groovy" flowable:autoStoreVariables="false"><extensionElements><design:stencilid><![CDATA[ScriptTask]]></design:stencilid></extensionElements><script><![CDATA[// #importFile NONE
+import com.collibra.dgc.workflow.api.exception.WorkflowException
+
+def ex = new WorkflowException("Choose either Upload or Delete.")
+ex.setTitleMessage("Unknown Action")
+throw ex
+]]></script></scriptTask>
+    <scriptTask id="validateUpload" name="Validate upload" scriptFormat="groovy" flowable:autoStoreVariables="false"><extensionElements><design:stencilid><![CDATA[ScriptTask]]></design:stencilid></extensionElements><script><![CDATA[// #importFile NONE
+import com.collibra.dgc.workflow.api.exception.WorkflowException
+
+def fail = { String title, String message ->
+    def ex = new WorkflowException(message)
+    ex.setTitleMessage(title)
+    throw ex
+}
+
+// Resolve the configured folder; plain folder names only
+String sectionName = (section ?: "").trim()
+if (!(sectionName ==~ /[A-Za-z0-9._-]+/) || sectionName.contains("..")) {
+    fail("Invalid Configuration", "The configured file location is not a valid folder name.")
+}
+File folder = new File(System.getProperty("collibra.data.dir") + File.separator + "dgc" + File.separator + sectionName)
+
+if (!fileUpload) {
+    fail("No File Attached", "Attach a file to upload.")
+}
+
+// Plain file names only: no folders or path tricks
+def fileInfo = fileApi.getFileInfo(string2Uuid(fileUpload))
+String name = (fileInfo.getName() ?: "").trim()
+if (!(name ==~ /[A-Za-z0-9][A-Za-z0-9._ -]{0,200}/) || name.contains("..")) {
+    fail("Invalid File Name", "File names may only contain letters, digits, spaces, dots, dashes and underscores.")
+}
+
+// Extension allow-list from the configuration variable
+List<String> allowed = (allowedExtensions ?: "").split(",").toList().collect { it.trim().toLowerCase() }.findAll { it }
+String ext = name.contains(".") ? name.substring(name.lastIndexOf(".") + 1).toLowerCase() : ""
+if (!allowed.contains(ext)) {
+    fail("File Type Not Allowed", "Allowed file types: " + allowed.join(", ") + ".")
+}
+
+File target = new File(folder, name)
+if (target.isDirectory()) {
+    fail("Invalid File Name", "'" + name + "' is a folder name and cannot be used.")
+}
+
+execution.setVariable("uploadFileName", name)
+execution.setVariable("fileExists", target.exists())
+]]></script></scriptTask>
+    <exclusiveGateway id="existsGateway" name="File exists?" default="toSaveNew"><extensionElements><design:stencilid><![CDATA[Exclusive_Databased_Gateway]]></design:stencilid></extensionElements></exclusiveGateway>
+    <userTask id="confirmOverwrite" name="Confirm overwrite of ${uploadFileName}" flowable:candidateUsers="user(${initiator})" flowable:formFieldValidation="false"><documentation>${uploadFileName} already exists in the dashboard folder. Overwrite it with the uploaded file?</documentation><extensionElements><flowable:formProperty id="overwriteButton" name="Overwrite" type="button" default="false"></flowable:formProperty><flowable:formProperty id="cancelOverwriteButton" name="Cancel" type="button" default="false"></flowable:formProperty><flowable:task-candidates-type><![CDATA[all]]></flowable:task-candidates-type><design:stencilid><![CDATA[FormTask]]></design:stencilid><design:candidatestype><![CDATA[all]]></design:candidatestype></extensionElements></userTask>
+    <exclusiveGateway id="overwriteGateway" name="Overwrite?" default="toDiscard"><extensionElements><design:stencilid><![CDATA[Exclusive_Databased_Gateway]]></design:stencilid></extensionElements></exclusiveGateway>
+    <scriptTask id="saveFile" name="Save file" scriptFormat="groovy" flowable:autoStoreVariables="false"><extensionElements><design:stencilid><![CDATA[ScriptTask]]></design:stencilid></extensionElements><script><![CDATA[// #importFile NONE
+import com.collibra.dgc.workflow.api.exception.WorkflowException
+
+def fail = { String title, String message ->
+    def ex = new WorkflowException(message)
+    ex.setTitleMessage(title)
+    throw ex
+}
+
+// Resolve the configured folder; plain folder names only
+String sectionName = (section ?: "").trim()
+if (!(sectionName ==~ /[A-Za-z0-9._-]+/) || sectionName.contains("..")) {
+    fail("Invalid Configuration", "The configured file location is not a valid folder name.")
+}
+File folder = new File(System.getProperty("collibra.data.dir") + File.separator + "dgc" + File.separator + sectionName)
+
+String name = uploadFileName
+File target = new File(folder, name)
+
+// Re-check: someone may have added the file since validation
+boolean overwriteConfirmed = execution.getVariable("overwriteButton") == true
+if (target.exists() && !overwriteConfirmed) {
+    fail("File Already Exists", "'" + name + "' already exists. Start the workflow again to confirm overwriting it.")
+}
+
+folder.mkdirs()
+UUID tempFileId = string2Uuid(fileUpload)
+fileApi.getFileAsStream(tempFileId).withCloseable { input ->
+    target.withOutputStream { output -> output << input }
+}
+
+// Remove the temporary upload from Collibra file storage
+try {
+    fileApi.deleteFile(tempFileId)
+} catch (Exception e) {
+    loggerApi.warn("Manage Dashboard Files >>> could not remove temporary upload " + tempFileId + ": " + e.getMessage())
+}
+
+loggerApi.info("Manage Dashboard Files >>> " + initiator + " uploaded '" + name + "' to " + sectionName + (overwriteConfirmed ? " (overwrite)" : ""))
+]]></script></scriptTask>
+    <scriptTask id="discardUpload" name="Discard upload" scriptFormat="groovy" flowable:autoStoreVariables="false"><extensionElements><design:stencilid><![CDATA[ScriptTask]]></design:stencilid></extensionElements><script><![CDATA[// #importFile NONE
+// Overwrite cancelled: remove the temporary upload from Collibra file storage
+try {
+    fileApi.deleteFile(string2Uuid(fileUpload))
+} catch (Exception e) {
+    loggerApi.warn("Manage Dashboard Files >>> could not remove temporary upload " + fileUpload + ": " + e.getMessage())
+}
+loggerApi.info("Manage Dashboard Files >>> " + initiator + " cancelled overwriting '" + uploadFileName + "'")
+]]></script></scriptTask>
+    <scriptTask id="listFiles" name="List dashboard files" scriptFormat="groovy" flowable:autoStoreVariables="false"><extensionElements><design:stencilid><![CDATA[ScriptTask]]></design:stencilid></extensionElements><script><![CDATA[// #importFile NONE
+import com.collibra.dgc.workflow.api.exception.WorkflowException
+
+def fail = { String title, String message ->
+    def ex = new WorkflowException(message)
+    ex.setTitleMessage(title)
+    throw ex
+}
+
+// Resolve the configured folder; plain folder names only
+String sectionName = (section ?: "").trim()
+if (!(sectionName ==~ /[A-Za-z0-9._-]+/) || sectionName.contains("..")) {
+    fail("Invalid Configuration", "The configured file location is not a valid folder name.")
+}
+File folder = new File(System.getProperty("collibra.data.dir") + File.separator + "dgc" + File.separator + sectionName)
+
+// Options for the dropdown: [fileName: fileName], sorted by name
+Map<String, String> fileOptions = new LinkedHashMap<String, String>()
+File[] entries = folder.listFiles()
+if (entries != null) {
+    entries.findAll { it.isFile() }
+           .sort { it.getName().toLowerCase() }
+           .each { fileOptions.put(it.getName(), it.getName()) }
+}
+
+if (fileOptions.isEmpty()) {
+    fail("No Files Found", "There are no files in the dashboard folder to delete.")
+}
+
+execution.setVariable("fileOptions", fileOptions)
+]]></script></scriptTask>
+    <userTask id="chooseFile" name="Choose a dashboard file to delete" flowable:candidateUsers="user(${initiator})" flowable:formFieldValidation="false"><documentation>Pick the file to delete. This cannot be undone.</documentation><extensionElements><flowable:formProperty id="fileToDelete" name="File to delete" type="dynamicEnum" required="false"><flowable:value id="dynamicValuesExpression" name="${fileOptions}"></flowable:value></flowable:formProperty><flowable:formProperty id="deleteButton" name="Delete" type="button" default="false"></flowable:formProperty><flowable:formProperty id="cancelDeleteButton" name="Cancel" type="button" default="false"></flowable:formProperty><flowable:task-candidates-type><![CDATA[all]]></flowable:task-candidates-type><design:stencilid><![CDATA[FormTask]]></design:stencilid><design:candidatestype><![CDATA[all]]></design:candidatestype></extensionElements></userTask>
+    <exclusiveGateway id="deleteGateway" name="Delete?" default="toCancelDelete"><extensionElements><design:stencilid><![CDATA[Exclusive_Databased_Gateway]]></design:stencilid></extensionElements></exclusiveGateway>
+    <scriptTask id="deleteFile" name="Delete file" scriptFormat="groovy" flowable:autoStoreVariables="false"><extensionElements><design:stencilid><![CDATA[ScriptTask]]></design:stencilid></extensionElements><script><![CDATA[// #importFile NONE
+import com.collibra.dgc.workflow.api.exception.WorkflowException
+
+def fail = { String title, String message ->
+    def ex = new WorkflowException(message)
+    ex.setTitleMessage(title)
+    throw ex
+}
+
+// Resolve the configured folder; plain folder names only
+String sectionName = (section ?: "").trim()
+if (!(sectionName ==~ /[A-Za-z0-9._-]+/) || sectionName.contains("..")) {
+    fail("Invalid Configuration", "The configured file location is not a valid folder name.")
+}
+File folder = new File(System.getProperty("collibra.data.dir") + File.separator + "dgc" + File.separator + sectionName)
+
+String name = (execution.getVariable("fileToDelete") ?: "").toString().trim()
+if (!name) {
+    fail("No File Selected", "Choose a file to delete.")
+}
+
+// Plain file names only: no folders or path tricks
+File target = new File(folder, name)
+if (name.contains("..") || !target.getParentFile().equals(folder) || !target.isFile()) {
+    fail("File Not Found", "'" + name + "' no longer exists in the dashboard folder.")
+}
+
+if (!target.delete()) {
+    fail("Delete Failed", "'" + name + "' could not be deleted. Check the server logs.")
+}
+
+loggerApi.info("Manage Dashboard Files >>> " + initiator + " deleted '" + name + "' from " + sectionName)
+]]></script></scriptTask>
+    <endEvent id="end" name="End"><extensionElements><design:stencilid><![CDATA[EndNoneEvent]]></design:stencilid></extensionElements></endEvent>
+    <sequenceFlow id="flow1" sourceRef="start" targetRef="actionGateway"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="toUpload" name="upload" sourceRef="actionGateway" targetRef="validateUpload"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements><conditionExpression xsi:type="tFormalExpression"><![CDATA[${action == 'upload'}]]></conditionExpression></sequenceFlow>
+    <sequenceFlow id="toDelete" name="delete" sourceRef="actionGateway" targetRef="listFiles"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements><conditionExpression xsi:type="tFormalExpression"><![CDATA[${action == 'delete'}]]></conditionExpression></sequenceFlow>
+    <sequenceFlow id="toUnknown" name="other" sourceRef="actionGateway" targetRef="unknownAction"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow5" sourceRef="unknownAction" targetRef="end"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow6" sourceRef="validateUpload" targetRef="existsGateway"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="toConfirm" name="exists" sourceRef="existsGateway" targetRef="confirmOverwrite"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements><conditionExpression xsi:type="tFormalExpression"><![CDATA[${fileExists}]]></conditionExpression></sequenceFlow>
+    <sequenceFlow id="toSaveNew" name="new file" sourceRef="existsGateway" targetRef="saveFile"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow9" sourceRef="confirmOverwrite" targetRef="overwriteGateway"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="toOverwrite" name="overwrite" sourceRef="overwriteGateway" targetRef="saveFile"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements><conditionExpression xsi:type="tFormalExpression"><![CDATA[${execution.getVariable('overwriteButton') == true}]]></conditionExpression></sequenceFlow>
+    <sequenceFlow id="toDiscard" name="cancel" sourceRef="overwriteGateway" targetRef="discardUpload"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow12" sourceRef="saveFile" targetRef="end"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow13" sourceRef="discardUpload" targetRef="end"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow14" sourceRef="listFiles" targetRef="chooseFile"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow15" sourceRef="chooseFile" targetRef="deleteGateway"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="toDeleteFile" name="delete" sourceRef="deleteGateway" targetRef="deleteFile"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements><conditionExpression xsi:type="tFormalExpression"><![CDATA[${execution.getVariable('deleteButton') == true}]]></conditionExpression></sequenceFlow>
+    <sequenceFlow id="toCancelDelete" name="cancel" sourceRef="deleteGateway" targetRef="end"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+    <sequenceFlow id="flow18" sourceRef="deleteFile" targetRef="end"><extensionElements><design:stencilid><![CDATA[SequenceFlow]]></design:stencilid></extensionElements></sequenceFlow>
+  </process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Collaboration">
+    <bpmndi:BPMNPlane bpmnElement="Collaboration" id="BPMNPlane_Collaboration">
+    <bpmndi:BPMNShape bpmnElement="pool1" id="BPMNShape_pool1"><omgdc:Bounds height="390.0" width="1460.0" x="30.0" y="30.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="lane1" id="BPMNShape_lane1"><omgdc:Bounds height="390.0" width="1430.0" x="60.0" y="30.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="start" id="BPMNShape_start"><omgdc:Bounds height="30.0" width="30.0" x="135.0" y="210.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="actionGateway" id="BPMNShape_actionGateway"><omgdc:Bounds height="40.0" width="40.0" x="290.0" y="205.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="unknownAction" id="BPMNShape_unknownAction"><omgdc:Bounds height="80.0" width="100.0" x="420.0" y="55.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="validateUpload" id="BPMNShape_validateUpload"><omgdc:Bounds height="80.0" width="100.0" x="420.0" y="315.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="existsGateway" id="BPMNShape_existsGateway"><omgdc:Bounds height="40.0" width="40.0" x="610.0" y="302.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="confirmOverwrite" id="BPMNShape_confirmOverwrite"><omgdc:Bounds height="80.0" width="100.0" x="740.0" y="282.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="overwriteGateway" id="BPMNShape_overwriteGateway"><omgdc:Bounds height="40.0" width="40.0" x="930.0" y="302.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="saveFile" id="BPMNShape_saveFile"><omgdc:Bounds height="80.0" width="100.0" x="1060.0" y="282.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="discardUpload" id="BPMNShape_discardUpload"><omgdc:Bounds height="80.0" width="100.0" x="1060.0" y="87.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="listFiles" id="BPMNShape_listFiles"><omgdc:Bounds height="80.0" width="100.0" x="420.0" y="185.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="chooseFile" id="BPMNShape_chooseFile"><omgdc:Bounds height="80.0" width="100.0" x="580.0" y="87.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="deleteGateway" id="BPMNShape_deleteGateway"><omgdc:Bounds height="40.0" width="40.0" x="770.0" y="107.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="deleteFile" id="BPMNShape_deleteFile"><omgdc:Bounds height="80.0" width="100.0" x="900.0" y="87.5"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNShape bpmnElement="end" id="BPMNShape_end"><omgdc:Bounds height="28.0" width="28.0" x="1256.0" y="211.0"></omgdc:Bounds></bpmndi:BPMNShape>
+    <bpmndi:BPMNEdge bpmnElement="flow1" id="BPMNEdge_flow1"><omgdi:waypoint x="165.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="290.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toUpload" id="BPMNEdge_toUpload"><omgdi:waypoint x="330.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="395.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="395.0" y="355.0"></omgdi:waypoint><omgdi:waypoint x="420.0" y="355.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toDelete" id="BPMNEdge_toDelete"><omgdi:waypoint x="330.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="420.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toUnknown" id="BPMNEdge_toUnknown"><omgdi:waypoint x="330.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="395.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="395.0" y="95.0"></omgdi:waypoint><omgdi:waypoint x="420.0" y="95.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow5" id="BPMNEdge_flow5"><omgdi:waypoint x="520.0" y="95.0"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="95.0"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="1256.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow6" id="BPMNEdge_flow6"><omgdi:waypoint x="520.0" y="355.0"></omgdi:waypoint><omgdi:waypoint x="585.0" y="355.0"></omgdi:waypoint><omgdi:waypoint x="585.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="610.0" y="322.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toConfirm" id="BPMNEdge_toConfirm"><omgdi:waypoint x="650.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="740.0" y="322.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toSaveNew" id="BPMNEdge_toSaveNew"><omgdi:waypoint x="650.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="1060.0" y="322.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow9" id="BPMNEdge_flow9"><omgdi:waypoint x="840.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="930.0" y="322.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toOverwrite" id="BPMNEdge_toOverwrite"><omgdi:waypoint x="970.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="1060.0" y="322.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toDiscard" id="BPMNEdge_toDiscard"><omgdi:waypoint x="970.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="1035.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="1035.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1060.0" y="127.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow12" id="BPMNEdge_flow12"><omgdi:waypoint x="1160.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="322.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="1256.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow13" id="BPMNEdge_flow13"><omgdi:waypoint x="1160.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="1256.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow14" id="BPMNEdge_flow14"><omgdi:waypoint x="520.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="555.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="555.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="580.0" y="127.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow15" id="BPMNEdge_flow15"><omgdi:waypoint x="680.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="770.0" y="127.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toDeleteFile" id="BPMNEdge_toDeleteFile"><omgdi:waypoint x="810.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="900.0" y="127.5"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="toCancelDelete" id="BPMNEdge_toCancelDelete"><omgdi:waypoint x="810.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="1256.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    <bpmndi:BPMNEdge bpmnElement="flow18" id="BPMNEdge_flow18"><omgdi:waypoint x="1000.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="127.5"></omgdi:waypoint><omgdi:waypoint x="1231.0" y="225.0"></omgdi:waypoint><omgdi:waypoint x="1256.0" y="225.0"></omgdi:waypoint></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane></bpmndi:BPMNDiagram>
+</definitions>
